@@ -2,21 +2,42 @@ import os
 import openai
 import gradio as gr
 
-# ... (保留你的 API Key 和 MODEL_CONFIGS 定义) ...
+# 1. 必须先定义这个字典 [cite: 66-77]
+MODEL_CONFIGS = {
+    "阿里云-通义千问": {
+        "api_key": os.getenv("DASHSCOPE_API_KEY"),
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen-turbo"
+    },
+    "智谱AI-ChatGLM": {
+        "api_key": os.getenv("ZHIPU_API_KEY"),
+        "base_url": "https://open.bigmodel.cn/api/paas/v4/",
+        "model": "glm-4"
+    }
+}
 
-# 核心交互函数：增加了 top_p 参数并修复了智谱报错问题
+# 2. 定义交互函数
 def interact_llm(chatbot, user_input, model_choice, temp, top_p):
     if not user_input:
         return chatbot, ""
     
     try:
-        config = MODEL_CONFIGS[model_choice]
+        config = MODEL_CONFIGS[model_choice] # 这里会用到上面的变量 [cite: 66]
         client = openai.OpenAI(
             api_key=config["api_key"],
             base_url=config["base_url"]
         )
 
-        # 1. 构造消息历史 (确保格式兼容)
+        # 针对智谱 AI 的温度护栏：限制在 (0, 1.0) 之间
+        current_temp = float(temp)
+        if model_choice == "智谱AI-ChatGLM":
+    # 智谱要求 (0, 1.0]，我们限制在 0.01 到 0.99
+            current_temp = max(0.01, min(0.99, current_temp))
+        else:
+    # 阿里通义千问要求 [0, 2.0)，我们限制在 0 到 1.99
+            current_temp = max(0.0, min(1.99, current_temp))
+        
+        # 构造消息历史
         messages = []
         for msg in chatbot:
             if isinstance(msg, dict):
@@ -26,13 +47,7 @@ def interact_llm(chatbot, user_input, model_choice, temp, top_p):
                 messages.append({"role": "assistant", "content": msg[1]})
         messages.append({"role": "user", "content": user_input})
 
-        # 2. 【解决智谱报错】对温度进行参数校验
-        current_temp = float(temp)
-        if model_choice == "智谱AI-ChatGLM":
-            # 智谱要求 (0, 1.0]，我们限制在 0.01 到 0.99 之间最稳
-            current_temp = max(0.01, min(0.99, current_temp))
-        
-        # 3. 调用 API (加入了 top_p)
+        # 调用接口
         response = client.chat.completions.create(
             model=config["model"],
             messages=messages,
@@ -41,8 +56,6 @@ def interact_llm(chatbot, user_input, model_choice, temp, top_p):
         )
         
         bot_reply = response.choices[0].message.content
-
-        # 4. 更新界面
         chatbot.append({"role": "user", "content": user_input})
         chatbot.append({"role": "assistant", "content": bot_reply})
 
@@ -51,21 +64,20 @@ def interact_llm(chatbot, user_input, model_choice, temp, top_p):
     
     return chatbot, ""
 
-# --- 界面部分 ---
+# 3. 最后构建界面
 with gr.Blocks() as demo:
-    gr.Markdown("## 🤖 HCI Lab 2: Multi-Model Comparison")
+    gr.Markdown("## 🤖 Multi-Model Comparison")
     
     with gr.Row():
         with gr.Column(scale=1):
+            # 此时使用 MODEL_CONFIGS 就不会报错了 [cite: 66]
             model_selector = gr.Dropdown(
                 choices=list(MODEL_CONFIGS.keys()), 
                 value="阿里云-通义千问", 
                 label="选择模型"
             )
-            # 两个核心滑块
             temp_slider = gr.Slider(0, 2, 1, step=0.1, label="温度 (Temperature)")
             top_p_slider = gr.Slider(0, 1.0, 0.7, step=0.05, label="核采样阈值 (Top-p)")
-            
             reset_btn = gr.Button("🗑️ 清空对话")
         
         with gr.Column(scale=3):
@@ -73,7 +85,7 @@ with gr.Blocks() as demo:
             msg_input = gr.Textbox(placeholder="输入问题并回车...", label="输入框")
             send_btn = gr.Button("🚀 发送", variant="primary")
 
-    # 事件绑定 (注意 inputs 列表里增加了 top_p_slider)
+    # 事件绑定
     send_btn.click(
         interact_llm, 
         inputs=[chatbot_ui, msg_input, model_selector, temp_slider, top_p_slider], 
@@ -87,4 +99,4 @@ with gr.Blocks() as demo:
     reset_btn.click(lambda: [], None, chatbot_ui)
 
 if __name__ == "__main__":
-    demo.launch(debug=True)
+    demo.launch(share=True)
